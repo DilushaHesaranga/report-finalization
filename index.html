@@ -1291,18 +1291,36 @@
     function initPuter() {
       if (window.puter) {
         updateCloudStatusUI('puter-connected');
-        puter.kv.get('report_tracker_data').then(res => {
-          if (res) {
-            const parsed = JSON.parse(res);
-            if (parsed.members) membersData = parsed.members;
-            if (parsed.sessions) sessionsData = parsed.sessions;
-            render();
-            updateMetrics();
-          }
-        }).catch(err => console.warn('Puter KV get error', err));
+        syncFromPuter();
+        // Auto-sync every 10 seconds and on tab focus
+        setInterval(syncFromPuter, 10000);
+        window.addEventListener('focus', syncFromPuter);
       } else {
         updateCloudStatusUI('local');
       }
+    }
+
+    function syncFromPuter() {
+      if (!window.puter || cloudConfig.provider !== 'puter') return;
+      puter.kv.get('report_tracker_data').then(res => {
+        if (res) {
+          const parsed = JSON.parse(res);
+          let changed = false;
+          if (parsed.members && JSON.stringify(parsed.members) !== JSON.stringify(membersData)) {
+            membersData = parsed.members;
+            changed = true;
+          }
+          if (parsed.sessions && JSON.stringify(parsed.sessions) !== JSON.stringify(sessionsData)) {
+            sessionsData = parsed.sessions;
+            changed = true;
+          }
+          if (changed) {
+            render();
+            updateMetrics();
+            console.log('Puter: Synced latest updates from cloud');
+          }
+        }
+      }).catch(err => console.warn('Puter KV sync error', err));
     }
 
     function updateCloudStatusUI(status) {
@@ -1994,6 +2012,15 @@
         if (fileBlob) {
           zip.file(cleanName, fileBlob);
           fileCount++;
+        } else if (m.fileDownloadUrl && m.fileDownloadUrl.startsWith('puter://') && window.puter) {
+          try {
+            const path = m.fileDownloadUrl.replace('puter://', '');
+            const blob = await puter.fs.read(path);
+            zip.file(cleanName, blob);
+            fileCount++;
+          } catch (err) {
+            console.warn('Could not read Puter file for zip', err);
+          }
         } else if (m.fileDownloadUrl && m.fileDownloadUrl.startsWith('http')) {
           try {
             const resp = await fetch(m.fileDownloadUrl);
@@ -2038,6 +2065,15 @@
       if (member.fileDownloadUrl && member.fileDownloadUrl.startsWith('http')) {
         window.open(member.fileDownloadUrl, '_blank');
         showToast(`Opening document in new tab...`, 'success');
+        return;
+      }
+
+      if (member.fileDownloadUrl && member.fileDownloadUrl.startsWith('puter://') && window.puter) {
+        showToast(`Loading ${member.attachedFileName} from Puter Cloud...`, 'info');
+        const path = member.fileDownloadUrl.replace('puter://', '');
+        const blob = await puter.fs.read(path);
+        const objUrl = URL.createObjectURL(blob);
+        window.open(objUrl, '_blank');
         return;
       }
 
